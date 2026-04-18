@@ -84,7 +84,6 @@ impl SsrcState {
         let should_decode = config.decode_mode.should_decode();
         if let Some((packet, decrypted, payload_offset, payload_end_pad_len)) = pkt {
             let rtp = RtpPacket::new(&packet).unwrap();
-            let extensions = rtp.get_extension() != 0;
 
             let payload = rtp.payload();
             let payload_end_pad = payload.len().saturating_sub(payload_end_pad_len);
@@ -95,10 +94,11 @@ impl SsrcState {
             let new_seq: u16 = rtp.get_sequence().into();
             let missed_packets = new_seq.saturating_sub(self.playout_buffer.next_seq().0);
 
-            // TODO: maybe hand over audio and extension indices alongside packet?
+            // The udp_rx-supplied payload_offset already accounts for the RTP extension header
+            // (see Cipher::decrypt_rtp_in_place), so scan_and_decode must not skip it again.
             let (audio, _packet_size) = self.scan_and_decode(
                 &payload[payload_offset..payload_end_pad],
-                extensions,
+                false,
                 missed_packets,
                 should_decode && decrypted,
             )?;
