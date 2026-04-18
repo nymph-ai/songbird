@@ -298,6 +298,7 @@ impl AuxNetwork {
                 }
             },
             GatewayEvent::DavePrepareTransition(ev) => {
+                trace!(target: "songbird::dave", transition_id = ev.transition_id, protocol_version = ev.protocol_version, "dave: DavePrepareTransition");
                 self.dave_pending_transitions
                     .insert(ev.transition_id, ev.protocol_version);
 
@@ -317,9 +318,11 @@ impl AuxNetwork {
                 }
             },
             GatewayEvent::DaveExecuteTransition(ev) => {
+                trace!(target: "songbird::dave", transition_id = ev.transition_id, "dave: DaveExecuteTransition");
                 self.execute_dave_transition(ev.transition_id);
             },
             GatewayEvent::DavePrepareEpoch(ev) if ev.epoch == 1 => {
+                trace!(target: "songbird::dave", epoch = ev.epoch, protocol_version = ev.protocol_version, "dave: DavePrepareEpoch epoch=1, reinitializing session");
                 self.dave_protocol_version
                     .store(ev.protocol_version, Ordering::Relaxed);
                 match self.reinit_dave_session().await {
@@ -331,6 +334,7 @@ impl AuxNetwork {
                 }
             },
             GatewayEvent::DaveMlsExternalSender(ev) => {
+                trace!(target: "songbird::dave", external_sender_len = ev.external_sender.len(), "dave: DaveMlsExternalSender");
                 if let Some(ref mut dave_session) = *self.dave_session.write().unwrap() {
                     if let Err(e) = dave_session.set_external_sender(&ev.external_sender) {
                         warn!(error = ?e, "error setting MLS external sender");
@@ -338,6 +342,7 @@ impl AuxNetwork {
                 }
             },
             GatewayEvent::DaveMlsProposals(ev) => {
+                trace!(target: "songbird::dave", operation_type = ?ev.operation_type, proposals_len = ev.proposals.len(), "dave: DaveMlsProposals");
                 let operation_type = match ev.operation_type {
                     DaveMlsProposalsOperationType::Append => davey::ProposalsOperationType::APPEND,
                     DaveMlsProposalsOperationType::Revoke => davey::ProposalsOperationType::REVOKE,
@@ -375,6 +380,7 @@ impl AuxNetwork {
                 }
             },
             GatewayEvent::DaveMlsAnnounceCommitTransition(ev) => {
+                trace!(target: "songbird::dave", transition_id = ev.transition_id, commit_len = ev.commit_message.len(), "dave: DaveMlsAnnounceCommitTransition");
                 match self.dave_process_commit(&ev.commit_message) {
                     Some(Ok(())) if ev.transition_id != 0 => {
                         let protocol_version = self.dave_protocol_version.load(Ordering::Relaxed);
@@ -406,7 +412,9 @@ impl AuxNetwork {
                     Some(Ok(())) | None => {},
                 }
             },
-            GatewayEvent::DaveMlsWelcome(ev) => match self.dave_process_welcome(&ev.welcome) {
+            GatewayEvent::DaveMlsWelcome(ev) => {
+                trace!(target: "songbird::dave", transition_id = ev.transition_id, welcome_len = ev.welcome.len(), "dave: DaveMlsWelcome");
+                match self.dave_process_welcome(&ev.welcome) {
                 Some(Ok(())) if ev.transition_id != 0 => {
                     let protocol_version = self.dave_protocol_version.load(Ordering::Relaxed);
 
@@ -436,6 +444,7 @@ impl AuxNetwork {
                     }
                 },
                 Some(Ok(())) | None => {},
+                }
             },
             other => {
                 trace!("Received other websocket data: {:?}", other);
@@ -467,6 +476,7 @@ impl AuxNetwork {
 
     async fn reinit_dave_session(&mut self) -> Result<(), DaveReinitError> {
         let protocol_version = self.dave_protocol_version.load(Ordering::Relaxed);
+        trace!(target: "songbird::dave", protocol_version, "dave: reinit_dave_session enter");
 
         if let Some(dave_protocol_version) = NonZeroU16::new(protocol_version) {
             let user_id = self.info.user_id.0.into();
@@ -486,12 +496,19 @@ impl AuxNetwork {
                     key_package
                 };
 
-            self.ws_client
+            trace!(target: "songbird::dave", key_package_len = key_package.len(), "dave: sending DaveMlsKeyPackage");
+            let send_result = self.ws_client
                 .send_binary(&GatewayEvent::DaveMlsKeyPackage(DaveMlsKeyPackage {
                     key_package,
                 }))
-                .await?;
+                .await;
+            match &send_result {
+                Ok(()) => trace!(target: "songbird::dave", "dave: DaveMlsKeyPackage sent ok"),
+                Err(e) => warn!(target: "songbird::dave", error = ?e, "dave: DaveMlsKeyPackage send failed"),
+            }
+            send_result?;
         } else if let Some(ref mut dave_session) = *self.dave_session.write().unwrap() {
+            trace!(target: "songbird::dave", "dave: reinit with protocol_version=0 → reset+passthrough");
             dave_session.reset()?;
             dave_session.set_passthrough_mode(true, Some(10));
         }

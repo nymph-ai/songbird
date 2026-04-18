@@ -144,6 +144,29 @@ impl UdpRx {
                     // now remove all dead ssrcs.
                     self.decoder_map.retain(|_, v| v.prune_time > now);
 
+                    // Periodic DAVE state dump for diagnosing MLS handshake stalls.
+                    let pv = self.dave_protocol_version.load(Ordering::Relaxed);
+                    let (ready, user_ids_len) = {
+                        if let Some(ref s) = *self.dave_session.read().unwrap() {
+                            let n = s.get_user_ids().map(|v| v.len()).unwrap_or(0);
+                            (s.is_ready(), n)
+                        } else {
+                            (false, 0)
+                        }
+                    };
+                    let ssrc_map_len = self.ssrc_signalling.ssrc_user_map.len();
+                    let user_ssrc_map_len = self.ssrc_signalling.user_ssrc_map.len();
+                    trace!(
+                        target: "songbird::dave",
+                        protocol_version = pv,
+                        session_ready = ready,
+                        dave_user_ids = user_ids_len,
+                        ssrc_user_map = ssrc_map_len,
+                        user_ssrc_map = user_ssrc_map_len,
+                        decoder_map = self.decoder_map.len(),
+                        "dave: state dump (5s tick)"
+                    );
+
                     cleanup_time = now + Duration::from_secs(5);
                 },
             }
@@ -212,13 +235,16 @@ impl UdpRx {
                         // one reason or another; otherwise there'd be error logs for trying to decode
                         // Opus
                         let Some(user_id) = self.ssrc_signalling.ssrc_user_map.get(&ssrc) else {
+                            trace!(target: "songbird::dave", ssrc, "dave: drop rtp — no user_id mapped for ssrc");
                             return;
                         };
                         let Some(ref mut dave_session) = *self.dave_session.write().unwrap() else {
+                            trace!(target: "songbird::dave", ssrc, user_id = user_id.0, "dave: drop rtp — dave_session None");
                             return;
                         };
 
                         if !dave_session.is_ready() {
+                            trace!(target: "songbird::dave", ssrc, user_id = user_id.0, "dave: drop rtp — session not ready");
                             return;
                         }
 
@@ -226,6 +252,7 @@ impl UdpRx {
 
                         match result {
                             Ok(decrypted_body) => {
+                                trace!(target: "songbird::dave", ssrc, user_id = user_id.0, in_len = body.len(), out_len = decrypted_body.len(), "dave: decrypt ok");
                                 packet_data = Some((
                                     rtp_body_start,
                                     rtp_body_tail + (body.len() - decrypted_body.len()),
@@ -240,6 +267,7 @@ impl UdpRx {
                                 },
                             )) => {
                                 // Silently drop encrypted packets for users whose ratchets are not configured yet.
+                                trace!(target: "songbird::dave", ssrc, user_id = user_id.0, "dave: drop rtp — no decryptor/cryptor for user (ratchet not configured yet)");
                                 return;
                             },
                             Err(e) => {
