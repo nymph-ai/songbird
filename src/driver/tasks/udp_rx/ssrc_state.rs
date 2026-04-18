@@ -66,7 +66,12 @@ impl SsrcState {
         // different cases: null packet who we want to decode as a miss, and packet who we must ignore temporarily.
         let m_pkt = self.playout_buffer.fetch_packet(config);
         let pkt = match m_pkt {
-            PacketLookup::Packet(StoredPacket { packet, decrypted }) => Some((packet, decrypted)),
+            PacketLookup::Packet(StoredPacket {
+                packet,
+                decrypted,
+                payload_offset,
+                payload_end_pad,
+            }) => Some((packet, decrypted, payload_offset, payload_end_pad)),
             PacketLookup::MissedPacket => None,
             PacketLookup::Filling => return Ok(None),
         };
@@ -77,13 +82,12 @@ impl SsrcState {
         };
 
         let should_decode = config.decode_mode.should_decode();
-        if let Some((packet, decrypted)) = pkt {
+        if let Some((packet, decrypted, payload_offset, payload_end_pad_len)) = pkt {
             let rtp = RtpPacket::new(&packet).unwrap();
             let extensions = rtp.get_extension() != 0;
 
             let payload = rtp.payload();
-            let payload_offset = self.crypto_mode.payload_prefix_len();
-            let payload_end_pad = payload.len() - self.crypto_mode.payload_suffix_len();
+            let payload_end_pad = payload.len().saturating_sub(payload_end_pad_len);
 
             // We still need to compute missed packets here in case of long loss chains or similar.
             // This occurs due to the fallback in 'store_packet' (i.e., empty buffer and massive seq difference).
