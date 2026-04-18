@@ -349,7 +349,7 @@ impl UdpRx {
     }
 }
 
-#[instrument(skip(interconnect, rx, cipher))]
+#[instrument(skip_all)]
 pub(crate) async fn runner(
     mut interconnect: Interconnect,
     rx: Receiver<UdpRxMessage>,

@@ -537,7 +537,7 @@ impl AuxNetwork {
     }
 }
 
-#[instrument(skip(interconnect, aux))]
+#[instrument(skip_all)]
 pub(crate) async fn runner(mut interconnect: Interconnect, mut aux: AuxNetwork) {
     trace!("WS thread started.");
     aux.run(&mut interconnect).await;
